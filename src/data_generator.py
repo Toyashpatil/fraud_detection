@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 def random_date(start, end):
     return start + timedelta(seconds=random.randint(0, int((end - start).total_seconds())))
 
-def generate_synthetic_data(n_customers=2500, n_txns=60000):
-    np.random.seed(42)
-    random.seed(42)
+def generate_synthetic_data(n_customers=2500, n_txns=60000, seed=42):
+    np.random.seed(seed)
+    random.seed(seed)
 
     start = datetime(2024,1,1)
     end = datetime(2025,11,1)
@@ -27,19 +27,13 @@ def generate_synthetic_data(n_customers=2500, n_txns=60000):
         cust = customers.sample(1).iloc[0]
         cid = int(cust.customer_id)
         amount = float(np.round(np.random.exponential(scale=120), 2))
-
         if np.random.rand() < 0.015:
             amount *= np.random.randint(5,60)
-
         txn_type = np.random.choice(txn_types, p=[0.45,0.2,0.25,0.1])
-        origin_country = "IN"
-        dest_country = "IN"
-        merchant = np.random.choice(merchant_categories)
         ts = random_date(start,end)
-
         rows.append([
             i+1, cid, amount, txn_type,
-            origin_country, dest_country, merchant,
+            "IN", "IN", np.random.choice(merchant_categories),
             ts, ts.weekday(), ts.hour,
             np.random.poisson(0.8),
             np.random.poisson(2.0),
@@ -48,12 +42,10 @@ def generate_synthetic_data(n_customers=2500, n_txns=60000):
 
     df = pd.DataFrame(rows, columns=[
         "txn_id","customer_id","amount","txn_type","origin_country","dest_country",
-        "merchant_category","timestamp","weekday","hour","txns_24h","txns_7d",
-        "balance"
+        "merchant_category","timestamp","weekday","hour","txns_24h","txns_7d","balance"
     ])
 
     df = df.merge(customers, on="customer_id", how="left")
     df["recipient_account_id"] = None
     df["label"] = 0
-
     return df, customers
