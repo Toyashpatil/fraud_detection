@@ -48,14 +48,62 @@ def create_features(df):
         g["sum_outflow_24h"] = outflow_amount.rolling("24h").sum().fillna(0)
         g["count_outflow_24h"] = outflow_count.rolling("24h").sum().fillna(0)
 
+        # Short-window burst counts (1h, 3h, 6h)
+        g["count_outflow_1h"] = outflow_count.rolling("1h").sum().fillna(0)
+        g["count_outflow_3h"] = outflow_count.rolling("3h").sum().fillna(0)
+        g["count_outflow_6h"] = outflow_count.rolling("6h").sum().fillna(0)
+
         # rolling median and max of outflow amounts in 24h
         g["median_outflow_24h"] = outflow_amount.replace(0, np.nan).rolling("24h").median().fillna(0)
         g["max_outflow_24h"] = outflow_amount.rolling("24h").max().fillna(0)
+
+        # peak transfers per hour within last 24h: compute hourly buckets and take rolling 24-hour max
+        try:
+            hourly_counts = outflow_count.resample('1h').sum()
+            hourly_peak_24 = hourly_counts.rolling(24).max()
+            # align back to transaction timestamps by forward-filling the hourly bucket value
+            g["max_outflow_per_hour_24h"] = hourly_peak_24.reindex(g.index, method='ffill').fillna(0)
+        except Exception:
+            g["max_outflow_per_hour_24h"] = 0
 
         # number of transfers >= 20k in last 24h
         high_transfer = g["amount"].where((g["is_outflow"]==1) & (g["amount"] >= 20000), other=0.0)
         # count non-zero entries in rolling window
         g["num_transfers_above_20k_24h"] = (high_transfer > 0).rolling("24h").sum().fillna(0)
+
+        # Recipient-based features: entropy and unique counts in rolling windows
+        # consider only outflow recipient behaviour
+        recipient_series = g["recipient_account_id"].where(g["is_outflow"]==1)
+
+        def entropy(s):
+            s = s.dropna()
+            if s.size == 0:
+                return 0.0
+            vc = s.value_counts(normalize=True)
+            return - (vc * np.log2(vc)).sum()
+
+        # entropy over last 24h and 7d
+        try:
+            g["recipient_entropy_24h"] = recipient_series.rolling("24h").apply(lambda x: entropy(pd.Series(x)), raw=False).fillna(0)
+        except Exception:
+            g["recipient_entropy_24h"] = 0
+        try:
+            g["recipient_entropy_7d"] = recipient_series.rolling("7d").apply(lambda x: entropy(pd.Series(x)), raw=False).fillna(0)
+        except Exception:
+            g["recipient_entropy_7d"] = 0
+
+        # unique recipient counts in 24h and 7d (used to approximate fraction of new recipients)
+        try:
+            g["unique_recipients_24h"] = recipient_series.rolling("24h").apply(lambda x: pd.Series(x).dropna().nunique(), raw=False).fillna(0)
+        except Exception:
+            g["unique_recipients_24h"] = 0
+        try:
+            g["unique_recipients_7d"] = recipient_series.rolling("7d").apply(lambda x: pd.Series(x).dropna().nunique(), raw=False).fillna(0)
+        except Exception:
+            g["unique_recipients_7d"] = 0
+
+        # approximate new recipient fraction: unique_24h / unique_7d (proxy; closer to 1 means concentrated recent recipients)
+        g["new_recipient_fraction_24h"] = g["unique_recipients_24h"] / (g["unique_recipients_7d"] + 1e-9)
 
         # last inbound (most recent prior credit amount) and timestamp
         # forward-fill last seen inbound amount and its timestamp
@@ -90,6 +138,16 @@ def create_features(df):
         "inflow_to_outflow_ratio_24h","is_large_inflow_recent"
     ]].fillna(0)
 
+    # Fill NA for newly added burst/recipient features
+    new_numeric_cols = [
+        "count_outflow_1h","count_outflow_3h","count_outflow_6h","max_outflow_per_hour_24h",
+        "recipient_entropy_24h","recipient_entropy_7d","unique_recipients_24h","unique_recipients_7d",
+        "new_recipient_fraction_24h"
+    ]
+    for c in new_numeric_cols:
+        if c in df.columns:
+            df[c] = df[c].fillna(0)
+
     # --- Final feature columns (keep old ones + new ones) ---
     feature_cols = [
         # original set
@@ -101,6 +159,11 @@ def create_features(df):
         "last_inflow_amount","time_since_last_inflow_hours","sum_outflow_24h","count_outflow_24h",
         "median_outflow_24h","max_outflow_24h","inflow_to_outflow_ratio_24h","is_large_inflow_recent",
         "num_transfers_above_20k_24h"
+        ,
+        # burst & recipient-distribution features
+        "count_outflow_1h","count_outflow_3h","count_outflow_6h","max_outflow_per_hour_24h",
+        "recipient_entropy_24h","recipient_entropy_7d","unique_recipients_24h","unique_recipients_7d",
+        "new_recipient_fraction_24h"
     ]
 
     # Ensure all requested columns exist

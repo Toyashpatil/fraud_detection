@@ -8,6 +8,7 @@ def inject_smurfing(df, customers, n_smurfers=30, seed=42):
     np.random.seed(seed)
     smurfers = np.random.choice(customers.customer_id, n_smurfers, replace=False)
 
+    case_id_ctr = 0
     for s in smurfers:
         mask = df.customer_id == s
         cand = df[mask]
@@ -24,7 +25,13 @@ def inject_smurfing(df, customers, n_smurfers=30, seed=42):
         chosen = cand_transfer.sample(frac=0.75, replace=False)
         df.loc[chosen.index, "amount"] = df.loc[chosen.index, "amount"].apply(lambda x: round(max(5, x*0.05),2))
         df.loc[chosen.index, "recipient_account_id"] = [f"R_{s}_{i}" for i in range(len(chosen))]
+        # assign a fraud_case_id per smurfing account
+        fraud_case_id = f"smurf_{s}_{seed}_{case_id_ctr}"
         df.loc[chosen.index, "label"] = 1
+        df.loc[chosen.index, "fraud_case_id"] = fraud_case_id
+        # mark account-level label for all transactions of this customer
+        df.loc[mask, "account_label"] = 1
+        case_id_ctr += 1
 
     return df
 
@@ -96,6 +103,21 @@ def inject_structuring(df, customers, n_structurers=10, inflow_amount=1_000_000,
 
     if new_rows:
         df_new = pd.DataFrame(new_rows)
+        # For structuring cases, assign fraud_case_id to the outflows per account
+        # Find the groups of rows per customer and assign case ids
+        struct_case_ctr = 0
+        for s in structurers:
+            mask_new = df_new["customer_id"] == s
+            if not mask_new.any():
+                continue
+            # outflows for this structurer are labeled as fraud (label==1)
+            fraud_mask = mask_new & (df_new["label"] == 1)
+            if fraud_mask.any():
+                cid = f"struct_{s}_{seed}_{struct_case_ctr}"
+                df_new.loc[fraud_mask, "fraud_case_id"] = cid
+                # mark account_label on the original df for that customer too
+                df.loc[df["customer_id"]==s, "account_label"] = 1
+                struct_case_ctr += 1
         # Ensure types align
         df = pd.concat([df, df_new], ignore_index=True, sort=False)
         # sort by timestamp to maintain chronological order
